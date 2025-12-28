@@ -1,0 +1,114 @@
+sort Node = struct null | node(data: Nat, next: Node);
+
+act
+rcv_ReadTop: Node;
+snd_ReadTop: Node;
+ReadTop: Node;
+
+rcv_CAS: Node#Node;
+snd_CAS: Node#Node;
+CAS: Node#Node;
+
+rcv_Result: Bool;
+snd_Result: Bool;
+Result: Bool;
+
+CallPush: Nat#Nat;
+CallPop: Nat;
+ReturnPush: Nat;
+ReturnPop: Nat#Int;
+ReturnEmpty: Nat;
+
+NewNode: Nat;
+AssignNext: Node;
+GetNext: Node;
+
+%Atomic protocol
+rcv_StartAtomicBlock; snd_StartAtomicBlock; StartAtomicBlock;
+rcv_EndAtomicBlock; snd_EndAtomicBlock; EndAtomicBlock;
+
+AtomicStatement;
+
+proc LinkedList(top: Node) = 
+	rcv_ReadTop(top).LinkedList(top)	
+	+
+	sum old: Node, new: Node.	
+		(rcv_CAS(old, new) | snd_Result(old == top)). ((old == top) -> LinkedList(new) <> LinkedList(top)) 
+	;
+	
+proc Atomic = 
+	rcv_StartAtomicBlock. rcv_EndAtomicBlock. Atomic +
+	AtomicStatement. Atomic;
+	
+proc CallPushPrime(tid: Nat, v: Nat) = CallPush(tid, v) . snd_StartAtomicBlock;
+proc CallPopPrime(tid: Nat) = CallPop(tid) . snd_StartAtomicBlock;
+proc ReturnPushPrime(tid: Nat) = snd_EndAtomicBlock . ReturnPush(tid);
+proc ReturnPopPrime(tid: Nat, v: Int) = snd_EndAtomicBlock . ReturnPop(tid, v);
+proc ReturnEmptyPrime(tid: Nat) = snd_EndAtomicBlock . ReturnEmpty(tid);
+
+proc Push(tid: Nat, v: Nat) = 
+	CallPushPrime(tid, v).
+	NewNode(v).
+	PushWhile(tid, v);
+	
+proc PushWhile(tid: Nat, v: Nat) =
+	sum old:Node.
+		snd_ReadTop(old).
+		AssignNext(node(v, old)).
+		((snd_CAS(old, node(v, old)) | rcv_Result(true). ReturnPushPrime(tid)) + 
+			(snd_CAS(old, node(v, old)) | rcv_Result(false)).PushWhile(tid, v))	;
+
+proc Pop(tid: Nat) = 
+	CallPopPrime(tid).
+	PopWhile(tid) ;
+
+proc PopWhile(tid: Nat) = 
+	sum old:Node.
+		snd_ReadTop(old).
+		(old == null)
+		-> ReturnEmptyPrime(tid) 
+		<> GetNext(next(old)).
+		   ((snd_CAS(old, next(old)) | rcv_Result(true)).ReturnPopPrime(tid, data(old)) + 
+			(snd_CAS(old, next(old)) | rcv_Result(false)).PopWhile(tid)) ;
+
+proc Thread(id: Nat, nOp: Nat, elms: List(Nat)) = 
+	(nOp > 0) -> ThreadProgress(id, nOp, elms, 1);
+
+proc ThreadProgress(id: Nat, nOp: Nat, elms: List(Nat), nDone: Nat) = 
+	(nDone <= nOp) -> (Push(id, head(elms)) + Pop(id)). ThreadProgress(id, nOp, tail(elms), nDone+1);
+	
+init 
+	hide({
+		NewNode,
+		AssignNext,
+		GetNext,
+		ReadTop, 
+		CAS,
+		Result,
+		AtomicStatement,
+		StartAtomicBlock,
+		EndAtomicBlock
+	},
+    allow({
+		CallPush | AtomicStatement,
+		CallPop | AtomicStatement,
+		ReturnPush | AtomicStatement, 
+		ReturnPop | AtomicStatement,
+		ReturnEmpty | AtomicStatement,
+		NewNode,
+		AssignNext,
+		GetNext,		
+		ReadTop,
+		CAS | Result, 	
+		StartAtomicBlock,
+		EndAtomicBlock
+	},
+    comm({
+		rcv_ReadTop | snd_ReadTop -> ReadTop,
+		rcv_CAS | snd_CAS -> CAS,	
+		rcv_Result | snd_Result -> Result,
+		rcv_StartAtomicBlock | snd_StartAtomicBlock -> StartAtomicBlock,
+		rcv_EndAtomicBlock | snd_EndAtomicBlock -> EndAtomicBlock
+	},  LinkedList(null) || Atomic ||
+		Thread(1, 2, [2, 4]) || Thread(2, 2, [4, 8]) || Thread(3, 2, [1, 8])
+)));

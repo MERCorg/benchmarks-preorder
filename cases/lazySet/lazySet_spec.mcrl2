@@ -1,0 +1,209 @@
+sort Node = struct null | node(item: Int, key: Int, next: Int, marked: Bool, lock: Bool, mem: Nat); 
+sort ArrayNodes = Int -> Node;
+
+map
+	MinKey: Int;
+	MaxKey: Pos;
+	
+	hashCode: Int -> Nat;
+	lockNode: Node -> Node;
+	unlockNode: Node -> Node;
+	markNode: Node -> Node;
+	
+	insertNode: ArrayNodes # Nat # Nat # Nat -> ArrayNodes;
+	removeNode: ArrayNodes # Nat -> ArrayNodes;
+
+var
+	i, k, n: Int; mk, l: Bool; m: Nat; 
+	an: ArrayNodes;
+	loc: Nat; nextL: Nat; it: Nat;
+
+eqn
+	MinKey = -1;
+	MaxKey = 100;
+	
+	hashCode(i) = i mod MaxKey;
+	lockNode(node(i, k, n, mk, l, m)) = node(i, k, n, mk, true, m);
+	unlockNode(node(i, k, n, mk, l, m)) = node(i, k, n, mk, false, m);
+	markNode(node(i, k, n, mk, l, m)) = node(i, k, n, true, l, m);
+	
+	insertNode(an, nextL, it, loc) = an[nextL -> node(it, hashCode(it), next(an(loc)), marked(an(loc)), false, nextL)][loc -> node(item(an(loc)), key(an(loc)), nextL, false, lock(an(loc)), loc)];
+
+	removeNode(an, loc) = an[loc -> node(item(an(loc)), key(an(loc)), next(an(next(an(loc)))), marked(an(loc)), lock(an(loc)), mem(an(loc)))];
+	
+act
+snd_ReadNode: Int#Node;
+rcv_ReadNode: Int#Node;
+ReadNode: Int#Node;
+snd_ReadNext: Int#Node;
+rcv_ReadNext: Int#Node;
+ReadNext: Int#Node;
+
+snd_LockNode: Int;
+rcv_LockNode: Int;
+LockNode: Int;
+snd_UnlockNode: Int;
+rcv_UnlockNode: Int;
+UnlockNode: Int;
+
+CallAdd: Nat#Nat;
+ReturnAdd: Nat#Bool;
+CallRemove: Nat#Nat;
+ReturnRemove: Nat#Bool;
+
+snd_InsertItem: Nat#Nat;
+rcv_InsertItem: Nat#Nat;
+InsertItem: Nat#Nat;
+snd_RemoveItem: Nat;
+rcv_RemoveItem: Nat;
+RemoveItem: Nat;
+
+snd_MarkRemoved: Int;
+rcv_MarkRemoved: Int;
+MarkRemoved: Int;
+
+GetHashCode: Nat;
+
+snd_ValidateNodes: Nat#Nat;
+rcv_ValidateNodes: Nat#Nat;
+ValidateNodes: Nat#Nat;
+snd_Validation: Bool;
+rcv_Validation: Bool;
+Validation: Bool;
+
+rcv_StartAtomicBlock; snd_StartAtomicBlock; StartAtomicBlock;
+rcv_EndAtomicBlock; snd_EndAtomicBlock; EndAtomicBlock;
+AtomicStatement;
+
+proc LinkedList(nodes: ArrayNodes, nextLocation: Nat) = 
+	sum element: Int.
+		snd_ReadNode(element, nodes(element)). LinkedList(nodes, nextLocation) +
+	sum elementN: Int.
+		snd_ReadNext(elementN, nodes(next(nodes(elementN)))). LinkedList(nodes, nextLocation) + %get the latest information
+	sum n: Int.
+		(!lock(nodes(n))) -> rcv_LockNode(n). LinkedList(nodes[n->lockNode(nodes(n))], nextLocation) +
+	sum nn: Int.
+		rcv_UnlockNode(nn). LinkedList(nodes[nn->unlockNode(nodes(nn))], nextLocation) +
+	sum item1, loc: Nat. 
+		rcv_InsertItem(item1, loc). LinkedList(insertNode(nodes, nextLocation, item1, loc), (nextLocation+1)) +
+	sum loc: Nat. 
+		rcv_RemoveItem(loc). LinkedList(removeNode(nodes, loc), nextLocation) +
+	sum nnn: Int.
+		rcv_MarkRemoved(nnn). LinkedList(nodes[nnn->markNode(nodes(nnn))], nextLocation) +
+	sum predNode, curr: Nat.
+		rcv_ValidateNodes(predNode, curr). Validate(nodes, predNode, curr). LinkedList(nodes, nextLocation);
+		
+proc Validate(nodes: ArrayNodes, predNode: Nat, curr: Nat) =
+	(!marked(nodes(predNode)) && !marked(nodes(curr)) && next(nodes(predNode)) == curr)
+		-> snd_Validation(true)
+		<> snd_Validation(false);
+
+proc Atomic = 
+	rcv_StartAtomicBlock. rcv_EndAtomicBlock. Atomic +
+    AtomicStatement. Atomic;	
+
+CallAddPrime(id: Nat, itemToAdd: Nat) = CallAdd(id, itemToAdd). snd_StartAtomicBlock;
+ReturnAddPrime(id: Nat, res: Bool) = snd_EndAtomicBlock. ReturnAdd(id, res);
+CallRemovePrime(id: Nat, itemToRemove: Nat) = CallRemove(id, itemToRemove). snd_StartAtomicBlock;
+ReturnRemovePrime(id: Nat, res: Bool) = snd_EndAtomicBlock. ReturnRemove(id, res);	
+		
+proc Add(id: Nat, itemToAdd: Nat) = 
+	CallAddPrime(id, itemToAdd).
+	GetHashCode(hashCode(itemToAdd)).
+	AddWhile(id, itemToAdd);
+			
+proc AddWhile(id: Nat, itemToAdd: Nat) = 
+	sum predNode: Node.
+	rcv_ReadNode(0, predNode).
+	sum curr: Node.
+		rcv_ReadNext(mem(predNode), curr).
+		AddWhile2(id, itemToAdd, predNode, curr);
+				
+proc AddWhile2(id: Nat, itemToAdd: Nat, predNode: Node, curr: Node) = 
+	(key(curr) < hashCode(itemToAdd))
+		-> sum nextCurr: Node.  rcv_ReadNext(mem(curr), nextCurr).  AddWhile2(id, itemToAdd, curr, nextCurr)
+		<> snd_LockNode(mem(predNode)).  snd_LockNode(mem(curr)).
+		   snd_ValidateNodes(mem(predNode), mem(curr)). 
+			(rcv_Validation(true).			
+				((key(curr) == hashCode(itemToAdd))
+				-> snd_UnlockNode(mem(predNode)). snd_UnlockNode(mem(curr)). ReturnAddPrime(id, false)
+				<> 	snd_InsertItem(itemToAdd, mem(predNode)). snd_UnlockNode(mem(predNode)). snd_UnlockNode(mem(curr)). ReturnAddPrime(id, true))
+			+ 
+			rcv_Validation(false). snd_UnlockNode(mem(predNode)). snd_UnlockNode(mem(curr)). AddWhile(id, itemToAdd));
+			
+proc Remove(id: Nat, itemToRemove: Nat) = 
+	CallRemovePrime(id, itemToRemove).
+	GetHashCode(hashCode(itemToRemove)).
+	RemoveWhile(id, itemToRemove);	
+			
+proc RemoveWhile(id: Nat, itemToRemove: Nat) = 
+	sum predNode: Node.
+	rcv_ReadNode(0, predNode).
+	sum curr: Node.
+		rcv_ReadNext(mem(predNode), curr).
+		RemoveWhile2(id, itemToRemove, predNode, curr);
+			
+proc RemoveWhile2(id: Nat, itemToRemove: Nat, predNode: Node, curr: Node) = 
+	(key(curr) < hashCode(itemToRemove))
+		-> sum nextCurr: Node. rcv_ReadNext(mem(curr), nextCurr). RemoveWhile2(id, itemToRemove, curr, nextCurr)
+		<> snd_LockNode(mem(predNode)). snd_LockNode(mem(curr)).	
+		   snd_ValidateNodes(mem(predNode), mem(curr)). 
+			(rcv_Validation(true).			
+				((key(curr) == hashCode(itemToRemove))
+				-> 	snd_MarkRemoved(mem(curr)). snd_RemoveItem(mem(predNode)). snd_UnlockNode(mem(predNode)). snd_UnlockNode(mem(curr)). ReturnRemovePrime(id, true)
+				<>  snd_UnlockNode(mem(predNode)). snd_UnlockNode(mem(curr)). ReturnRemovePrime(id, false))
+			+
+			rcv_Validation(false). snd_UnlockNode(mem(predNode)). snd_UnlockNode(mem(curr)). RemoveWhile(id, itemToRemove));
+			
+proc Thread(id: Nat, nOp: Nat, elms: List(Nat)) = 
+	(nOp > 0) -> ThreadProgress(id, nOp, elms, 1);
+
+proc ThreadProgress(id: Nat, nOp: Nat, elms: List(Nat), nDone: Nat) = 
+	(nDone <= nOp) -> (Add(id, head(elms)) + Remove(id, head(elms))). ThreadProgress(id, nOp, tail(elms), nDone + 1);
+
+init 
+	hide({
+		GetHashCode,
+		InsertItem,
+		RemoveItem,
+		LockNode,
+		UnlockNode,
+		ReadNode,
+		ReadNext,
+		ValidateNodes,
+		Validation,
+		MarkRemoved,
+		StartAtomicBlock, EndAtomicBlock, AtomicStatement
+	},
+	allow({
+		CallAdd | AtomicStatement,
+		ReturnAdd | AtomicStatement,
+		CallRemove | AtomicStatement,
+		ReturnRemove | AtomicStatement,				
+		InsertItem,
+		RemoveItem,
+		GetHashCode,
+		LockNode,
+		UnlockNode,
+		ReadNode,
+		ReadNext,
+		ValidateNodes,
+		Validation,
+		MarkRemoved,
+		StartAtomicBlock, EndAtomicBlock
+	},
+	comm({
+		rcv_InsertItem | snd_InsertItem -> InsertItem,
+		rcv_RemoveItem | snd_RemoveItem -> RemoveItem,
+		rcv_MarkRemoved | snd_MarkRemoved -> MarkRemoved,
+		rcv_LockNode | snd_LockNode -> LockNode,
+		rcv_UnlockNode | snd_UnlockNode -> UnlockNode,
+		rcv_ReadNode | snd_ReadNode -> ReadNode,
+		rcv_ReadNext | snd_ReadNext -> ReadNext,
+		snd_ValidateNodes | rcv_ValidateNodes -> ValidateNodes,
+		snd_Validation | rcv_Validation -> Validation,
+		rcv_StartAtomicBlock | snd_StartAtomicBlock -> StartAtomicBlock,
+        rcv_EndAtomicBlock | snd_EndAtomicBlock -> EndAtomicBlock
+	},  LinkedList((lambda n: Int.null)[0->node(MinKey, MinKey, 1, false, false, 0)][1->node(MaxKey, MaxKey, -1, false, false, 1)], 2) %
+		|| Thread(1, 2, [2, 4]) || Thread(2, 2, [4, 8]) || Atomic
+)));

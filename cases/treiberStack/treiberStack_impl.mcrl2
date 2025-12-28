@@ -1,0 +1,102 @@
+sort Node = struct null | node(data: Nat, next: Node);
+
+act
+rcv_ReadTop: Node;
+snd_ReadTop: Node;
+ReadTop: Node;
+
+rcv_CAS: Node#Node;
+snd_CAS: Node#Node;
+CAS: Node#Node;
+
+rcv_Result: Bool;
+snd_Result: Bool;
+Result: Bool;
+
+CallPush: Nat#Nat;
+CallPop: Nat;
+ReturnPush: Nat;
+ReturnPop: Nat#Int;
+ReturnEmpty: Nat;
+
+CallPushPrime: Nat#Nat;
+CallPopPrime: Nat;
+ReturnPushPrime: Nat;
+ReturnPopPrime: Nat#Int;
+ReturnEmptyPrime: Nat;
+
+NewNode: Nat;
+AssignNext: Node;
+GetNext: Node;
+
+proc LinkedList(top: Node) = 
+	rcv_ReadTop(top).LinkedList(top)	
+	+
+	sum old: Node, new: Node.	
+		(rcv_CAS(old, new) | snd_Result(old == top)). ((old == top) -> LinkedList(new) <> LinkedList(top));
+
+proc Push(tid: Nat, v: Nat) = 
+	CallPushPrime(tid, v).
+	NewNode(v).
+	PushWhile(tid, v);
+	
+proc PushWhile(tid: Nat, v: Nat) =
+	sum old:Node.
+		snd_ReadTop(old).
+		AssignNext(node(v, old)).
+		((snd_CAS(old, node(v, old)) | rcv_Result(true). ReturnPushPrime(tid)) + 
+			(snd_CAS(old, node(v, old)) | rcv_Result(false)).PushWhile(tid, v))	;
+
+proc Pop(tid: Nat) = 
+	CallPopPrime(tid).
+	PopWhile(tid) ;
+
+proc PopWhile(tid: Nat) = 
+	sum old:Node.
+		snd_ReadTop(old).
+		(old == null)
+		-> ReturnEmptyPrime(tid) 
+		<> GetNext(next(old)).
+		   ((snd_CAS(old, next(old)) | rcv_Result(true)).ReturnPopPrime(tid, data(old)) + 
+			(snd_CAS(old, next(old)) | rcv_Result(false)).PopWhile(tid));
+
+proc Thread(id: Nat, nOp: Nat, elms: List(Nat)) = 
+	(nOp > 0) -> ThreadProgress(id, nOp, elms, 1);
+
+proc ThreadProgress(id: Nat, nOp: Nat, elms: List(Nat), nDone: Nat) = 
+	(nDone <= nOp) -> (Push(id, head(elms)) + Pop(id)). ThreadProgress(id, nOp, tail(elms), nDone+1);
+	
+init 
+	hide({
+		NewNode,
+		AssignNext,
+		GetNext,
+		ReadTop, 
+		CAS,
+		Result
+	},
+    allow({
+		CallPush,
+		CallPop,
+		ReturnPush,
+		ReturnPop,
+		ReturnEmpty,
+		NewNode,
+		AssignNext,
+		GetNext,		
+		ReadTop,
+		CAS | Result
+	},
+    comm({
+		rcv_ReadTop | snd_ReadTop -> ReadTop,
+		rcv_CAS | snd_CAS -> CAS,	
+		rcv_Result | snd_Result -> Result
+	}, 
+	rename({
+		CallPushPrime -> CallPush,
+		CallPopPrime -> CallPop,
+		ReturnPushPrime -> ReturnPush,
+		ReturnPopPrime -> ReturnPop,
+		ReturnEmptyPrime -> ReturnEmpty
+	}, LinkedList(null) || Thread(1, 2, [2, 4]) || Thread(2, 2, [4, 8]) || Thread(3, 2, [1, 8])	
+))));

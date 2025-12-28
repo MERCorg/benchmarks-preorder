@@ -1,0 +1,167 @@
+sort Node = struct null | node(item: Int, key: Int, next: Int, lock: Bool, mem: Nat); 
+sort ArrayNodes = Int -> Node;
+
+map
+	MinKey: Int;
+	MaxKey: Pos;
+	
+	hashCode: Int -> Nat;
+	lockNode: Node -> Node;
+	unlockNode: Node -> Node;
+	
+	insertNode: ArrayNodes # Nat # Nat # Nat -> ArrayNodes;
+	removeNode: ArrayNodes # Nat -> ArrayNodes;
+
+var
+	i, k, n: Int; m: Nat; l: Bool;
+	an: ArrayNodes;
+	loc: Nat; nextL: Nat; it: Nat;
+
+eqn
+	MinKey = -1;
+	MaxKey = 100;
+	
+	hashCode(i) = i mod MaxKey;
+	lockNode(node(i, k, n, l, m)) = node(i, k, n, true, m);
+	unlockNode(node(i, k, n, l, m)) = node(i, k, n, false, m);
+	
+	insertNode(an, nextL, it, loc) = an[nextL -> node(it, hashCode(it), next(an(loc)), false, nextL)][loc -> node(item(an(loc)), key(an(loc)), nextL, lock(an(loc)), loc)];
+
+	removeNode(an, loc) = an[loc -> node(item(an(loc)), key(an(loc)), next(an(next(an(loc)))), lock(an(loc)), mem(an(loc)))][next(an(loc)) -> null];
+
+act
+snd_ReadNode: Int#Node;
+rcv_ReadNode: Int#Node;
+ReadNode: Int#Node;
+snd_ReadNext: Int#Node;
+rcv_ReadNext: Int#Node;
+ReadNext: Int#Node;
+
+snd_LockNode: Int;
+rcv_LockNode: Int;
+LockNode: Int;
+snd_UnlockNode: Int;
+rcv_UnlockNode: Int;
+UnlockNode: Int;
+
+CallAdd: Nat#Nat;
+ReturnAdd: Nat#Bool;
+CallRemove: Nat#Nat;
+ReturnRemove: Nat#Bool;
+CallAddPrime: Nat#Nat;
+ReturnAddPrime: Nat#Bool;
+CallRemovePrime: Nat#Nat;
+ReturnRemovePrime: Nat#Bool;
+
+rcv_InsertItem: Nat#Nat;
+snd_InsertItem: Nat#Nat;
+InsertItem: Nat#Nat;
+rcv_RemoveItem: Nat;
+snd_RemoveItem: Nat;
+RemoveItem: Nat;
+GetHashCode: Nat;
+
+proc LinkedList(nodes: ArrayNodes, nextLoc: Nat) = 
+	sum element: Int.
+		snd_ReadNode(element, nodes(element)). LinkedList(nodes, nextLoc) +
+	sum elementN: Int.
+		snd_ReadNext(elementN, nodes(next(nodes(elementN)))). LinkedList(nodes, nextLoc) + %get the latest information
+	sum n: Int.
+		(!lock(nodes(n))) -> rcv_LockNode(n). LinkedList(nodes[n->lockNode(nodes(n))], nextLoc) +
+	sum nn: Int.
+		rcv_UnlockNode(nn). LinkedList(nodes[nn->unlockNode(nodes(nn))], nextLoc) +
+	sum item1, loc: Nat. 
+		rcv_InsertItem(item1, loc). LinkedList(insertNode(nodes, nextLoc, item1, loc), (nextLoc+1)) +
+	sum loc: Nat. 
+		rcv_RemoveItem(loc). LinkedList(removeNode(nodes, loc), nextLoc); 
+		
+proc Add(id: Nat, itemToAdd: Nat) = 
+	CallAddPrime(id, itemToAdd).
+	GetHashCode(hashCode(itemToAdd)).
+	snd_LockNode(0).
+	sum predNode: Node.
+		rcv_ReadNode(0, predNode).
+		sum curr: Node.
+			rcv_ReadNext(mem(predNode), curr).
+			snd_LockNode(mem(curr)).
+			AddWhile(id, itemToAdd, predNode, curr);
+
+proc AddWhile(id: Nat, itemToAdd: Nat, predNode: Node, curr: Node) = 
+	(key(curr) < hashCode(itemToAdd))
+		-> snd_UnlockNode(mem(predNode)).
+			sum nn: Node.
+				rcv_ReadNext(mem(curr), nn).
+				snd_LockNode(mem(nn)).
+				AddWhile(id, itemToAdd, curr, nn)
+		<> 	((key(curr) == hashCode(itemToAdd))
+			-> snd_UnlockNode(mem(curr)). snd_UnlockNode(mem(predNode)). ReturnAddPrime(id, false)
+			<> 	snd_InsertItem(itemToAdd, mem(predNode)). snd_UnlockNode(mem(curr)). 
+				snd_UnlockNode(mem(predNode)). ReturnAddPrime(id, true));
+			
+proc Remove(id: Nat, itemToRemove: Nat) = 
+	CallRemovePrime(id, itemToRemove).
+	GetHashCode(hashCode(itemToRemove)).
+	snd_LockNode(0).
+	sum predNode: Node.
+		rcv_ReadNode(0, predNode).
+		sum curr: Node.
+			rcv_ReadNext(mem(predNode), curr).
+			snd_LockNode(mem(curr)).
+			RemoveWhile(id, itemToRemove, predNode, curr);
+			
+proc RemoveWhile(id: Nat, itemToRemove: Nat, predNode: Node, curr: Node) = 
+	(key(curr) < hashCode(itemToRemove))
+		-> snd_UnlockNode(mem(predNode)).
+			sum nn: Node.
+				rcv_ReadNext(mem(curr), nn).
+				snd_LockNode(mem(nn)).
+				RemoveWhile(id, itemToRemove, curr, nn)
+		<> 	((key(curr) == hashCode(itemToRemove))
+			-> snd_RemoveItem(mem(predNode)). snd_UnlockNode(mem(predNode)). ReturnRemovePrime(id, true)
+			<>  snd_UnlockNode(mem(curr)). snd_UnlockNode(mem(predNode)). ReturnRemovePrime(id, false));
+			
+proc Thread(id: Nat, nOp: Nat, elms: List(Nat)) = 
+	(nOp > 0) -> ThreadProgress(id, nOp, elms, 1);
+
+proc ThreadProgress(id: Nat, nOp: Nat, elms: List(Nat), nDone: Nat) = 
+	(nDone <= nOp) -> (Add(id, head(elms)) + Remove(id, head(elms))). ThreadProgress(id, nOp, tail(elms), nDone + 1);
+
+init 
+	hide({
+		GetHashCode,
+		InsertItem,
+		RemoveItem,
+		LockNode,
+		UnlockNode,
+		ReadNode,
+		ReadNext
+	},
+	allow({
+		CallAdd,
+		ReturnAdd,
+		CallRemove,
+		ReturnRemove,
+		InsertItem,
+		RemoveItem,
+		GetHashCode,
+		LockNode,
+		UnlockNode,
+		ReadNode,
+		ReadNext
+	},
+	comm({
+		rcv_InsertItem | snd_InsertItem -> InsertItem,
+		rcv_RemoveItem | snd_RemoveItem -> RemoveItem,
+		rcv_LockNode | snd_LockNode -> LockNode,
+		rcv_UnlockNode | snd_UnlockNode -> UnlockNode,
+		rcv_ReadNode | snd_ReadNode -> ReadNode,
+		rcv_ReadNext | snd_ReadNext -> ReadNext
+	}, 
+	rename({
+		CallAddPrime -> CallAdd,
+		ReturnAddPrime -> ReturnAdd,
+		CallRemovePrime -> CallRemove,
+		ReturnRemovePrime -> ReturnRemove	
+	}, LinkedList((lambda n: Nat.null)[0->node(MinKey, MinKey, 1, false, 0)][1->node(MaxKey, MaxKey, -1, false, 1)], 2) ||
+		   Thread(1, 2, [2, 4]) || Thread(2, 2, [4, 8])											
+))));

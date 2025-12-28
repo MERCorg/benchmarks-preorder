@@ -1,0 +1,146 @@
+sort Node = struct null | node(item: Int, key: Int, next: Node); %item, key, next
+
+map
+	MinKey: Int;
+	MaxKey: Pos;
+	hashCode: Int -> Nat;
+	
+	insert: Nat#Node -> Node;
+	insertHelper: Nat#Nat#Node#Node -> Node;
+	remove: Nat#Node -> Node;
+	removeHelper: Nat#Nat#Node#Node -> Node;
+
+var
+	i, k: Int; n: Node;
+	ci, ck: Int; cn: Node;
+	el, kEl: Nat;
+
+eqn
+	MinKey = (-1);
+	MaxKey = 100;
+	hashCode(i) = i mod MaxKey;
+	
+	insert(el, node(i, k, n)) = insertHelper(el, hashCode(el), node(i, k, n), n); %insert(el, pred, curr)
+	insertHelper(el, kEl, node(i, k, n), node(ci, ck, cn)) = 
+		if(ck == kEl, node(i, k, n),  
+			if(ck < kEl, node(i, k, insertHelper(el, kEl, n, next(n))), 
+				node(i, k, node(el, kEl, n))));
+	
+	remove(el, node(i, k, n)) = removeHelper(el, hashCode(el), node(i, k, n), n);
+	removeHelper(el, kEl, node(i, k, n), node(ci, ck, cn)) = 
+		if(ck == kEl, node(i, k, cn), 
+			if(ck < kEl, node(i, k, removeHelper(el, kEl, n, next(n))), 
+				node(i, k, n)));
+
+act
+rcv_ReadHead: Node;
+snd_ReadHead: Node;
+ReadHead: Node;
+
+rcv_InsertItem: Nat;
+snd_InsertItem: Nat;
+InsertItem: Nat;
+rcv_RemoveItem: Nat;
+snd_RemoveItem: Nat;
+RemoveItem: Nat;
+
+rcv_Lock: Nat;
+snd_Lock: Nat;
+Lock: Nat;
+rcv_Unlock: Nat;
+snd_Unlock: Nat;
+Unlock: Nat;
+
+CallAdd: Nat#Nat; CallAddPrime: Nat#Nat;
+ReturnAdd: Nat#Bool; ReturnAddPrime: Nat#Bool;
+CallRemove: Nat#Nat; CallRemovePrime: Nat#Nat;
+ReturnRemove: Nat#Bool; ReturnRemovePrime: Nat#Bool;
+
+GetHashCode: Nat;
+NextIteration;
+
+proc LinkedList(nodes: Node) = 
+	rcv_ReadHead(nodes). LinkedList(nodes) 
+	+ sum item1: Nat. 
+		rcv_InsertItem(item1). LinkedList(insert(item1, nodes))
+	+ sum item2: Nat. 
+		rcv_RemoveItem(item2). LinkedList(remove(item2, nodes)); 
+
+proc ReentrantLock = 
+	sum id: Nat. rcv_Lock(id). rcv_Unlock(id). ReentrantLock;
+
+proc Add(id: Nat, itemToAdd: Nat) = 
+	CallAddPrime(id, itemToAdd).
+	GetHashCode(hashCode(itemToAdd)).
+	snd_Lock(id).
+	sum predNode: Node.
+		snd_ReadHead(predNode).
+		AddWhile(id, itemToAdd, predNode, next(predNode));
+	
+proc AddWhile(id: Nat, itemToAdd: Nat, predNode: Node, curr: Node) =
+	(key(curr) < hashCode(itemToAdd))
+		-> NextIteration. AddWhile(id, itemToAdd, curr, next(curr))
+		<> ((key(curr) == hashCode(itemToAdd)) 
+			-> snd_Unlock(id). ReturnAddPrime(id, false)
+			<> 	snd_InsertItem(itemToAdd).
+				snd_Unlock(id). ReturnAddPrime(id, true));
+
+proc Remove(id: Nat, itemToRemove: Nat) = 
+	CallRemovePrime(id, itemToRemove).
+	GetHashCode(hashCode(itemToRemove)).
+	snd_Lock(id).
+	sum predNode: Node.
+		snd_ReadHead(predNode).
+		RemoveWhile(id, itemToRemove, predNode, next(predNode));
+	
+proc RemoveWhile(id: Nat, itemToRemove: Nat, predNode: Node, curr: Node) =
+	(key(curr) < hashCode(itemToRemove))
+		-> NextIteration. RemoveWhile(id, itemToRemove, curr, next(curr))
+		<> ((key(curr) == itemToRemove) 
+			->  snd_RemoveItem(itemToRemove).
+				snd_Unlock(id). ReturnRemovePrime(id, true)
+			<> 	snd_Unlock(id). ReturnRemovePrime(id, false));
+			
+proc Thread(id: Nat, nOp: Nat, elms: List(Nat)) = 
+	(nOp > 0) -> ThreadProgress(id, nOp, elms, 1);
+
+proc ThreadProgress(id: Nat, nOp: Nat, elms: List(Nat), nDone: Nat) = 
+	(nDone <= nOp) -> (Add(id, head(elms)) + Remove(id, head(elms))). ThreadProgress(id, nOp, tail(elms), nDone + 1);
+
+init 
+	hide({
+		NextIteration,
+		ReadHead,
+		InsertItem,
+		RemoveItem,
+		Lock, Unlock,
+		GetHashCode
+	},
+	allow({
+		CallAdd,
+		ReturnAdd,
+		CallRemove,
+		ReturnRemove,
+		ReadHead,
+		InsertItem,
+		RemoveItem,
+		Lock, Unlock,
+		GetHashCode,
+		NextIteration
+	},
+	comm({
+		rcv_ReadHead | snd_ReadHead -> ReadHead,
+		rcv_InsertItem | snd_InsertItem -> InsertItem,
+		rcv_RemoveItem | snd_RemoveItem -> RemoveItem,
+		rcv_Lock | snd_Lock -> Lock,
+		rcv_Unlock | snd_Unlock -> Unlock
+	}, 
+	rename({
+		CallAddPrime -> CallAdd,
+		ReturnAddPrime -> ReturnAdd,
+		CallRemovePrime -> CallRemove,
+		ReturnRemovePrime -> ReturnRemove
+	},	
+	LinkedList(node(MinKey, MinKey, node(MaxKey, MaxKey, null))) || ReentrantLock ||
+	  Thread(1, 2, [2, 4]) || Thread(2, 2, [4, 8]) || Thread(3, 2, [1, 8])								
+))));

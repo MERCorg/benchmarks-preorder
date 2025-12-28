@@ -1,0 +1,155 @@
+sort Null = struct null;
+sort Item = struct item(nl: Null, ref: Nat) | item(value: Nat, ref: Nat);
+sort Array = Nat -> Item;
+
+map
+	L: Pos; %size of the array
+	isNull: Item -> Bool;
+
+var 
+	a: Array; 
+	v, r: Nat;
+
+eqn 
+	L = 5;
+	isNull(item(v, r)) = false;
+	isNull(item(null, r)) = true;
+	
+act
+CallEnqueue: Nat#Nat;
+ReturnEnqueue: Nat;
+CallDequeue: Nat;
+ReturnDequeue: Nat#Nat;
+CallEnqueuePrime: Nat#Nat;
+ReturnEnqueuePrime: Nat;
+CallDequeuePrime: Nat;
+ReturnDequeuePrime: Nat#Nat;
+
+rcv_ReadRear: Nat;
+snd_ReadRear: Nat;
+ReadRear: Nat;
+rcv_ReadFront: Nat;
+snd_ReadFront: Nat;
+ReadFront: Nat;
+rcv_ReadElement: Nat#Item;
+snd_ReadElement: Nat#Item;
+ReadElement: Nat#Item;
+
+rcv_Result: Bool;
+snd_Result: Bool;
+Result: Bool;
+rcv_CASRear: Nat#Nat;
+snd_CASRear: Nat#Nat;
+CASRear: Nat#Nat;
+rcv_CASFront: Nat#Nat;
+snd_CASFront: Nat#Nat;
+CASFront: Nat#Nat;
+rcv_CASElement: Nat#Item#Item;
+snd_CASElement: Nat#Item#Item;
+CASElement: Nat#Item#Item;
+
+proc QueueInterface(q: Array, rear: Nat, front: Nat) = 
+	rcv_ReadRear(rear). QueueInterface(q, rear, front) +
+	rcv_ReadFront(front). QueueInterface(q, rear, front) +
+	sum n: Nat. rcv_ReadElement(n, q(n)). QueueInterface(q, rear, front) +
+	sum oldR, newR: Nat.
+		(rcv_CASRear(oldR, newR) | snd_Result(oldR == rear)). ((oldR == rear) -> QueueInterface(q, newR, front) <> QueueInterface(q, rear, front)) +
+	sum oldF, newF: Nat.
+		(rcv_CASFront(oldF, newF) | snd_Result(oldF == front)). ((oldF == front) -> QueueInterface(q, rear, newF) <> QueueInterface(q, rear, front)) +
+	sum n: Nat, oldX, newX: Item.
+		(rcv_CASElement(n, oldX, newX) | snd_Result(q(n) == oldX)). ((q(n) == oldX) -> QueueInterface(q[n->newX], rear, front) <> QueueInterface(q, rear, front)) ;
+	
+proc Enqueue(tid: Nat, v: Nat) = 
+	CallEnqueuePrime(tid, v).
+	EnqueueTryAgain(tid, v);
+
+proc EnqueueTryAgain(tid: Nat, v: Nat) = 
+	sum r1: Nat.
+	snd_ReadRear(r1).
+	sum x: Item.
+		snd_ReadElement((r1 mod L), x).
+		sum r2: Nat.
+		snd_ReadRear(r2). 
+		((r1 != r2) -> EnqueueTryAgain(tid, v)
+		<> sum f1: Nat.
+			snd_ReadFront(f1).
+			((r1 == f1 + L) -> EnqueueTryAgain(tid, v)
+			<> ((isNull(x)) -> ((snd_CASElement((r1 mod L), x, item(v, ref(x)+1)) | rcv_Result(true)).
+								(sum b1: Bool. (snd_CASRear(r1, (r1+1)) | rcv_Result(b1))).
+								ReturnEnqueuePrime(tid) 
+								+ 
+								(snd_CASElement((r1 mod L), x, item(v, ref(x)+1)) | rcv_Result(false)).
+								EnqueueTryAgain(tid, v))
+							<>  sum b2: Bool. (snd_CASRear(r1, (r1+1)) | rcv_Result(b2)).
+								EnqueueTryAgain(tid, v))));
+								
+proc Dequeue(tid: Nat) = 
+	CallDequeuePrime(tid).
+	DequeueTryAgain(tid);
+	
+proc DequeueTryAgain(tid: Nat) = 
+	sum f1: Nat.
+	snd_ReadFront(f1).
+	sum x: Item.
+		snd_ReadElement((f1 mod L), x).
+		sum f2: Nat.
+		snd_ReadFront(f2).
+		((f1 != f2) -> DequeueTryAgain(tid)
+		<> sum r1: Nat.
+			snd_ReadRear(r1).
+			((f1 == r1) -> DequeueTryAgain(tid)
+			<> ((!isNull(x)) -> ((snd_CASElement((f1 mod L), x, item(null, ref(x) +1)) | rcv_Result(true)).
+								(sum b1: Bool. (snd_CASFront(f1, (f1+1)) | rcv_Result(b1))).
+								ReturnDequeuePrime(tid, value(x))
+								+ 
+								(snd_CASElement((f1 mod L), x, item(null, ref(x)+1)) | rcv_Result(false)).
+								DequeueTryAgain(tid))
+							<> 	sum b2: Bool. (snd_CASFront(f1, (f1+1)) | rcv_Result(b2)).
+								DequeueTryAgain(tid))));
+
+								
+proc Thread(id: Nat, nOp: Nat, elms: List(Nat)) = 
+	(nOp > 0) -> ThreadProgress(id, nOp, elms, 1);
+
+proc ThreadProgress(id: Nat, nOp: Nat, elms: List(Nat), nDone: Nat) = 
+	(nDone <= nOp) -> (Enqueue(id, head(elms)) + Dequeue(id)). ThreadProgress(id, nOp, tail(elms), nDone + 1);
+
+init 
+	hide({
+		ReadRear,
+		ReadFront,
+		ReadElement,
+		CASElement,
+		CASFront,
+		CASRear,
+		Result
+	}, 
+	allow({
+		CallEnqueue,
+		ReturnEnqueue,
+		CallDequeue,
+		ReturnDequeue,
+		ReadRear,
+		ReadFront,
+		ReadElement,
+		CASRear | Result, 
+		CASFront | Result,
+		CASElement | Result
+	}, 
+	comm({
+		rcv_ReadRear | snd_ReadRear -> ReadRear,
+		rcv_ReadFront | snd_ReadFront -> ReadFront,
+		rcv_ReadElement | snd_ReadElement -> ReadElement,
+		rcv_Result | snd_Result -> Result,
+		rcv_CASRear | snd_CASRear -> CASRear,
+		rcv_CASFront | snd_CASFront -> CASFront,
+		rcv_CASElement | snd_CASElement -> CASElement
+	},
+	rename({
+		CallEnqueuePrime -> CallEnqueue,
+		CallDequeuePrime -> CallDequeue,
+		ReturnEnqueuePrime -> ReturnEnqueue,
+		ReturnDequeuePrime -> ReturnDequeue
+	},
+	QueueInterface((lambda n:Nat.item(null, 0)), 0, 0) ||  Thread(1, 2, [2, 4]) || Thread(2, 2, [4, 8])								
+))));
