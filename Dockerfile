@@ -37,7 +37,7 @@ COPY ./merc /root/merc/
 
 ARG THREADS=8
 ENV PATH="/root/.cargo/bin:${PATH}"
-RUN cd /root/ltsinfo/ \
+RUN cd /root/merc/ \
     && cargo build --release --bin merc-lts -j${THREADS}
 
 # Copy the cases into the container
