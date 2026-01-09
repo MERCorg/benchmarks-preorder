@@ -1,14 +1,26 @@
-# Short explanation of the results
+# Overview
 
-Each of the benchmarks was performed 5 times, with the suffix indicating the
-index of the run. The results contains the standard output and timing results
-for every subdirectory next to the README.MD.
+The git repository should be initialized with the submodules, which can be done by running:
 
- - `result_naive` contains the results for the feature/impossible-futures-naive branch
- - `results_opt` contains the results for the feature/impossible-futures branch
- - `result_stable`, `result_with_antichains`, `result_antichain_{positive, negative}` contain the results for the feature/impossible-futures branch using ONLY the stable, none, antichain positive and negative optimisations respectively.
+```bash
+git submodule update --init
+```
 
-The optimisations can be disabled with the following changes:
-    * stable can be removed by commenting lines 135, 136 and removing the stable check on line 169.
-    * antichain positive can be removed by changing line 102 (removing the `!detail::antichain_include(anti_chain_positive, t.to(), spec_prime)`), and commnting lines 117-119.
-    * antichain negative can be removed by commenting lines 63-65, and 93.
+Then the [Dockerfile](Dockerfile) can be used to build a Docker image with all necessary dependencies and tools installed. To build the Docker image, run the following command in the root directory of the repository:
+
+```bash
+docker build -t benchmarks-preorder .
+```
+
+This will create a Docker image named `benchmarks-preorder`. From this we can
+create a container to run the scripts:
+
+```bash
+docker run -it --rm --mount type=bind,source=./results/,target=/root/results/ --mount type=bind,source=./cases/,target=/root/cases/  --mount type=bind,source=./scripts/,target=/root/scripts/ --mount type=bind,source=./merc-py/,target=/root/merc-py/ benchmarks-preorder
+```
+
+First the examples must be prepared by running the `prepare.py` script. This can be done with the following command inside the Docker container:
+
+```bash
+python3 /root/scripts/prepare.py /root/mCRL2/build/stage/bin/ /root/cases/ /root/results/prepare.log
+```

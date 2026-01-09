@@ -9,13 +9,13 @@ SCRIPT_PATH=os.path.dirname(__file__)
 
 def prepare(toolpath):
     
-    mcrl22lps = shutil.which("mcrl22lps", toolpath)
+    mcrl22lps = shutil.which("mcrl22lps", path=toolpath)
     if mcrl22lps is None:
-        raise FileNotFoundError("mcrl22lps not found in PATH")
+        raise FileNotFoundError("mcrl22lps not found in")
 
-    lps2lts = shutil.which("lps2lts", toolpath)
+    lps2lts = shutil.which("lps2lts", path=toolpath)
     if lps2lts is None:
-        raise FileNotFoundError("lps2lts not found in PATH")
+        raise FileNotFoundError("lps2lts not found in")
 
     # Iterate over all files in the specified directory
     for directory in os.listdir(SCRIPT_PATH):
@@ -33,21 +33,21 @@ def prepare(toolpath):
                     aut_file = os.path.join(SCRIPT_PATH, directory, f"{name}.aut")
 
                     subprocess.run([mcrl22lps, "-lregular2", "-n", "-v", mcrl2_file, lps_file], check=True)
-                    subprocess.run([lps2lts, "-v", lps_file, aut_file], check=True)
+                    # subprocess.run([lps2lts, "-v", lps_file, aut_file], check=True)
 
 def main():
     # Parse some configuration options
     parser = argparse.ArgumentParser(
-        prog="run_examples.py",
+        prog="run.py",
         description="Prepares the examples specifications for testing",
         epilog="",
     )
 
     parser.add_argument(
-        "FILE", action="store", type=str
+        "toolpath", action="store", type=str
     )
     parser.add_argument(
-        "-t", "--toolpath", action="store", type=str, required=True
+        "FILE", action="store", type=str
     )
     args = parser.parse_args()
 
@@ -64,10 +64,6 @@ def main():
         raise FileNotFoundError("timeout not found in PATH")
 
     # Iterate over all files in the specified directory
-    results = {
-        "timeout": "10m",
-    }
-
     for i in range(0, 5):
         for directory in os.listdir(SCRIPT_PATH):
             if not os.path.isdir(directory) or "auts" in directory:
@@ -100,7 +96,7 @@ def main():
                 }
             print(results[directory])
 
-        with open(f"{args.FILE}_{i}.json", "w", encoding="utf-8") as f:
+        with open(f"{args.FILE}.json", "a", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
 
 if __name__ == "__main__":
